@@ -1,6 +1,6 @@
 from flask import Flask, render_template_string, request, redirect, url_for
 import mercadopago
-from supabase import create_client, Client
+import requests
 import datetime
 
 app = Flask(__name__)
@@ -8,26 +8,30 @@ app = Flask(__name__)
 # --- CONFIGURACIÓN DE MERCADO PAGO ---
 sdk = mercadopago.SDK("TEST-4734346917637424-052718-4a94639f7278292cb00bf2729aefb204-142273030")
 
-# --- CONEXIÓN REAL CON SUPABASE ---
-SUPABASE_URL = "https://wwwujisceptxemkuwfxx.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind3d3VqaXNjZXB0eGVta3V3Znh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk5MTE0NTksImV4cCI6MjA5NTQ4NzQ1OX0.cB2sdHAkdRMDNBtUKhjsu791WW8ntHRn52lfdvTD3To"
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# --- CREDENCIALES DE SUPABASE ---
+SUPABASE_URL = "https://wwwujisceptxemkuwfxx.supabase.co/rest/v1/reservas"
+SUPABASE_HEADERS = {
+    "apikey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind3d3VqaXNjZXB0eGVta3V3Znh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk5MTE0NTksImV4cCI6MjA5NTQ4NzQ1OX0.cB2sdHAkdRMDNBtUKhjsu791WW8ntHRn52lfdvTD3To",
+    "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind3d3VqaXNjZXB0eGVta3V3Znh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk5MTE0NTksImV4cCI6MjA5NTQ4NzQ1OX0.cB2sdHAkdRMDNBtUKhjsu791WW8ntHRn52lfdvTD3To",
+    "Content-Type": "application/json",
+    "Prefer": "return=representation"
+}
 
 TOTAL_MODULOS = 16
 
-# --- MOTOR DE DISPONIBILIDAD CON BASE DE DATOS ---
+# --- MOTOR DE DISPONIBILIDAD SEGURO ---
 def verificar_disponibilidad(modulo, desde_str, hasta_str, reserva_id_ignorar=None):
     nuevas_fechas = (
         datetime.datetime.strptime(desde_str, "%Y-%m-%d").date(),
         datetime.datetime.strptime(hasta_str, "%Y-%m-%d").date()
     )
     
-    # Traemos las reservas existentes directamente desde Supabase
-    query = supabase.table("reservas").select("*").eq("modulo", modulo).in_("estado", ["Pendiente de Pago", "Ocupado"]).execute()
-    reservas_existentes = query.data
+    # Traemos las reservas por HTTP directo (Sin librerías mañeras)
+    url = f"{SUPABASE_URL}?modulo=eq.{modulo}&estado=in.(\"Pendiente de Pago\",\"Ocupado\")"
+    response = requests.get(url, headers=SUPABASE_HEADERS)
+    reservas_existentes = response.json() if response.status_code == 200 else []
     
     for res in reservas_existentes:
-        # ARREGLADO: Validación segura para evitar que falle si viene vacío (None)
         if reserva_id_ignorar is not None and int(res["id"]) == int(res_id_ignorar):
             continue
             
@@ -63,7 +67,7 @@ HTML_FORMULARIO = """
 <body>
     <div class="card">
         <h2>Reserva tu Estadía</h2>
-        <p>Introducí tus fechas. El sistema validará la disponibilidad real en la base de datos de Supabase.</p>
+        <p>Introducí tus fechas. El sistema validará la disponibilidad real en la nube.</p>
         <form action="/reservar" method="POST">
             <div class="form-group">
                 <label>Nombre Completo</label>
@@ -237,15 +241,16 @@ def procesar_reserva():
         "personas": personas
     }
     
-    query = supabase.table("reservas").insert(nueva_reserva_data).execute()
-    reserva_creada = query.data[0]
+    response = requests.post(SUPABASE_URL, headers=SUPABASE_HEADERS, json=nueva_reserva_data)
+    reserva_creada = response.json()[0]
     
     return render_template_string(HTML_PAGO, reserva_id=reserva_creada["id"], desde=desde, hasta=hasta)
 
 @app.route('/webhook_simulado')
 def webhook_simulado():
     res_id = int(request.args.get('reserva_id'))
-    supabase.table("reservas").update({"estado": "Ocupado"}).eq("id", res_id).execute()
+    url = f"{SUPABASE_URL}?id=eq.{res_id}"
+    requests.patch(url, headers=SUPABASE_HEADERS, json={"estado": "Ocupado"})
     return redirect(url_for('ver_panel'))
 
 @app.route('/reasignar', methods=['POST'])
@@ -253,12 +258,13 @@ def reasignar_modulo():
     res_id = int(request.form.get('reserva_id'))
     nuevo_mod = int(request.form.get('nuevo_modulo'))
     
-    query = supabase.table("reservas").select("*").eq("id", res_id).execute()
-    res_actual = query.data[0] if query.data else None
+    url_select = f"{SUPABASE_URL}?id=eq.{res_id}"
+    response = requests.get(url_select, headers=SUPABASE_HEADERS)
+    res_actual = response.json()[0] if response.json() else None
             
     if res_actual:
         if verificar_disponibilidad(nuevo_mod, res_actual["desde"], res_actual["hasta"], reserva_id_ignorar=res_id):
-            supabase.table("reservas").update({"modulo": nuevo_mod}).eq("id", res_id).execute()
+            requests.patch(url_select, headers=SUPABASE_HEADERS, json={"modulo": nuevo_mod})
             return redirect(url_for('ver_panel'))
         else:
             return redirect(url_for('ver_panel', error=f"¡Error! El Módulo {nuevo_mod} ya está ocupado en esas fechas."))
@@ -268,8 +274,9 @@ def reasignar_modulo():
 @app.route('/panel')
 def ver_panel():
     error_msg = request.args.get('error')
-    query = supabase.table("reservas").select("*").order("id").execute()
-    lista_reservas = query.data
+    url = f"{SUPABASE_URL}?order=id.asc"
+    response = requests.get(url, headers=SUPABASE_HEADERS)
+    lista_reservas = response.json() if response.status_code == 200 else []
     return render_template_string(HTML_PANEL, reservas=lista_reservas, total_modulos=TOTAL_MODULOS, msg_error=error_msg)
 
 if __name__ == '__main__':
