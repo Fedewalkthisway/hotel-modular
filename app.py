@@ -242,9 +242,17 @@ def procesar_reserva():
     }
     
     response = requests.post(SUPABASE_URL, headers=SUPABASE_HEADERS, json=nueva_reserva_data)
-    reserva_creada = response.json()[0]
+    datos_respuesta = response.json()
     
-    return render_template_string(HTML_PAGO, reserva_id=reserva_creada["id"], desde=desde, hasta=hasta)
+    # Validamos que Supabase nos haya devuelto el registro creado correctamente
+    if isinstance(datos_respuesta, list) and len(datos_respuesta) > 0:
+        reserva_id = datos_respuesta[0]["id"]
+    elif isinstance(datos_respuesta, dict) and "id" in datos_respuesta:
+        reserva_id = datos_respuesta["id"]
+    else:
+        return f"Error al guardar en la base de datos: {response.text}", 500
+    
+    return render_template_string(HTML_PAGO, reserva_id=reserva_id, desde=desde, hasta=hasta)
 
 @app.route('/webhook_simulado')
 def webhook_simulado():
