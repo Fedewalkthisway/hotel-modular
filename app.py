@@ -27,7 +27,8 @@ def verificar_disponibilidad(modulo, desde_str, hasta_str, reserva_id_ignorar=No
     reservas_existentes = query.data
     
     for res in reservas_existentes:
-        if reserva_id_ignorar and res["id"] == int(res_id_ignorar):
+        # ARREGLADO: Validación segura para evitar que falle si viene vacío (None)
+        if reserva_id_ignorar is not None and int(res["id"]) == int(res_id_ignorar):
             continue
             
         res_desde = datetime.datetime.strptime(res["desde"], "%Y-%m-%d").date()
@@ -180,7 +181,7 @@ HTML_PANEL = """
                                 <input type="hidden" name="reserva_id" value="{{ res.id }}">
                                 <select name="nuevo_modulo" onchange="this.form.submit()">
                                     {% for m in range(1, total_modulos + 1) %}
-                                        <option value="{{ m }}" {{ 'selected' if res.modulo == m }}>Módulo {{ m }}</option>
+                                        <option value="{{ m }}" {{ 'selected' if res.modulo|int == m }}>Módulo {{ m }}</option>
                                     {% endfor %}
                                 </select>
                             </form>
@@ -226,7 +227,6 @@ def procesar_reserva():
     if not modulo_libre:
         return "Lo sentimos, no hay disponibilidad.", 400
         
-    # INSERTAR EN SUPABASE: Se graba en la base de datos real
     nueva_reserva_data = {
         "modulo": modulo_libre,
         "estado": "Pendiente de Pago",
@@ -245,7 +245,6 @@ def procesar_reserva():
 @app.route('/webhook_simulado')
 def webhook_simulado():
     res_id = int(request.args.get('reserva_id'))
-    # ACTUALIZAR EN SUPABASE: Cambiamos el estado a Ocupado de forma permanente
     supabase.table("reservas").update({"estado": "Ocupado"}).eq("id", res_id).execute()
     return redirect(url_for('ver_panel'))
 
@@ -259,7 +258,6 @@ def reasignar_modulo():
             
     if res_actual:
         if verificar_disponibilidad(nuevo_mod, res_actual["desde"], res_actual["hasta"], reserva_id_ignorar=res_id):
-            # ACTUALIZAR REASIGNACIÓN EN SUPABASE
             supabase.table("reservas").update({"modulo": nuevo_mod}).eq("id", res_id).execute()
             return redirect(url_for('ver_panel'))
         else:
@@ -270,7 +268,6 @@ def reasignar_modulo():
 @app.route('/panel')
 def ver_panel():
     error_msg = request.args.get('error')
-    # LEER DE SUPABASE: Traemos todas las reservas ordenadas por ID para armar la tabla
     query = supabase.table("reservas").select("*").order("id").execute()
     lista_reservas = query.data
     return render_template_string(HTML_PANEL, reservas=lista_reservas, total_modulos=TOTAL_MODULOS, msg_error=error_msg)
