@@ -1,50 +1,42 @@
 from flask import Flask, render_template_string, request, redirect, url_for
 import mercadopago
+from supabase import create_client, Client
 import datetime
 
 app = Flask(__name__)
 
+# --- CONFIGURACIÓN DE MERCADO PAGO ---
 sdk = mercadopago.SDK("TEST-4734346917637424-052718-4a94639f7278292cb00bf2729aefb204-142273030")
 
-# --- BASE DE DATOS ESTRUCTURADA ---
-# Lista donde guardaremos cada reserva como un "contrato" independiente con ID único
-reservas = [
-    # Ejemplos cargados para que veas cómo el sistema maneja la superposición de fechas en un mismo módulo
-    {
-        "id": 1, "modulo": 1, "estado": "Ocupado", "huesped": "Carlos Pereyra", 
-        "dni": "20111222", "desde": "2026-06-01", "hasta": "2026-06-05", "personas": "2"
-    },
-    {
-        "id": 2, "modulo": 1, "estado": "Ocupado", "huesped": "Marta Gómez", 
-        "dni": "30444555", "desde": "2026-06-10", "hasta": "2026-06-15", "personas": "1"
-    }
-]
+# --- CONEXIÓN REAL CON SUPABASE ---
+SUPABASE_URL = "https://wwwujisceptxemkuwfxx.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind3d3VqaXNjZXB0eGVta3V3Znh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk5MTE0NTksImV4cCI6MjA5NTQ4NzQ1OX0.cB2sdHAkdRMDNBtUKhjsu791WW8ntHRn52lfdvTD3To"
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Total de módulos físicos en Bell Ville
 TOTAL_MODULOS = 16
 
-# --- FUNCIÓN CLAVE: DETECTOR DE SUPERPOSICIÓN DE FECHAS ---
+# --- MOTOR DE DISPONIBILIDAD CON BASE DE DATOS ---
 def verificar_disponibilidad(modulo, desde_str, hasta_str, reserva_id_ignorar=None):
-    """ Devuelve True si el módulo está LIBRE en ese rango de fechas """
     nuevas_fechas = (
         datetime.datetime.strptime(desde_str, "%Y-%m-%d").date(),
         datetime.datetime.strptime(hasta_str, "%Y-%m-%d").date()
     )
     
-    for res in reservas:
-        # Ignoramos la reserva actual si la estamos editando/reasignando de habitación
-        if reserva_id_ignorar and res["id"] == reserva_id_ignorar:
+    # Traemos las reservas existentes directamente desde Supabase
+    query = supabase.table("reservas").select("*").eq("modulo", modulo).in_("estado", ["Pendiente de Pago", "Ocupado"]).execute()
+    reservas_existentes = query.data
+    
+    for res in reservas_existentes:
+        if reserva_id_ignorar and res["id"] == int(res_id_ignorar):
             continue
             
-        if res["modulo"] == modulo and res["estado"] in ["Pendiente de Pago", "Ocupado"]:
-            res_desde = datetime.datetime.strptime(res["desde"], "%Y-%m-%d").date()
-            res_hasta = datetime.datetime.strptime(res["hasta"], "%Y-%m-%d").date()
-            
-            # Fórmula matemática de cruce de rangos: (InicioA <= FinB) y (FinA >= InicioB)
-            if nuevas_fechas[0] < res_hasta and nuevas_fechas[1] > res_desde:
-                return False # ¡Hay superposición! Está ocupado esos días
+        res_desde = datetime.datetime.strptime(res["desde"], "%Y-%m-%d").date()
+        res_hasta = datetime.datetime.strptime(res["hasta"], "%Y-%m-%d").date()
+        
+        if nuevas_fechas[0] < res_hasta and nuevas_fechas[1] > res_desde:
+            return False 
                 
-    return True # El módulo está limpio en esas fechas
+    return True
 
 # --- DISEÑO VISUAL ---
 
@@ -70,7 +62,7 @@ HTML_FORMULARIO = """
 <body>
     <div class="card">
         <h2>Reserva tu Estadía</h2>
-        <p>Introducí tus fechas. El sistema validará la disponibilidad real en la agenda.</p>
+        <p>Introducí tus fechas. El sistema validará la disponibilidad real en la base de datos de Supabase.</p>
         <form action="/reservar" method="POST">
             <div class="form-group">
                 <label>Nombre Completo</label>
@@ -118,7 +110,7 @@ HTML_PAGO = """
 <body>
     <div class="card">
         <h2>Lugar Asegurado 🕒</h2>
-        <p>Bloqueamos un espacio en la agenda para tus fechas del <strong>{{ desde }}</strong> al <strong>{{ hasta }}</strong>.</p>
+        <p>Bloqueamos el espacio en Supabase para tus fechas del <strong>{{ desde }}</strong> al <strong>{{ hasta }}</strong>.</p>
         <p>Monto: $15.000 ARS</p>
         <a href="/webhook_simulado?reserva_id={{ reserva_id }}" class="btn-simular">🟢 [ Simular Pago Exitoso ]</a>
     </div>
@@ -151,7 +143,7 @@ HTML_PANEL = """
 </head>
 <body>
     <header>
-        <h1>Centro de Mandos - Agenda del Hotel</h1>
+        <h1>Centro de Mandos (Persistente)</h1>
         <a href="/" style="color: #38bdf8; text-decoration:none; font-weight:bold;">+ Simular Cliente</a>
     </header>
     
@@ -161,7 +153,7 @@ HTML_PANEL = """
         {% endif %}
 
         <div class="seccion">
-            <h2>Todas las Reservas y Asignación de Módulos</h2>
+            <h2>Todas las Reservas Guardadas en la Nube</h2>
             <table>
                 <thead>
                     <tr>
@@ -225,7 +217,6 @@ def procesar_reserva():
     hasta = request.form.get('hasta')
     personas = request.form.get('personas')
     
-    # Buscamos de forma automatizada qué módulo tiene libre ESTE rango de fechas exacto
     modulo_libre = None
     for m in range(1, TOTAL_MODULOS + 1):
         if verificar_disponibilidad(m, desde, hasta):
@@ -233,11 +224,10 @@ def procesar_reserva():
             break
             
     if not modulo_libre:
-        return "Lo sentimos, no hay disponibilidad en ninguna habitación para las fechas seleccionadas.", 400
+        return "Lo sentimos, no hay disponibilidad.", 400
         
-    # Creamos el registro de la reserva
-    nueva_res = {
-        "id": len(reservas) + 1,
+    # INSERTAR EN SUPABASE: Se graba en la base de datos real
+    nueva_reserva_data = {
         "modulo": modulo_libre,
         "estado": "Pendiente de Pago",
         "huesped": nombre,
@@ -246,48 +236,44 @@ def procesar_reserva():
         "hasta": hasta,
         "personas": personas
     }
-    reservas.append(nueva_res)
     
-    return render_template_string(HTML_PAGO, reserva_id=nueva_res["id"], desde=desde, hasta=hasta)
+    query = supabase.table("reservas").insert(nueva_reserva_data).execute()
+    reserva_creada = query.data[0]
+    
+    return render_template_string(HTML_PAGO, reserva_id=reserva_creada["id"], desde=desde, hasta=hasta)
 
 @app.route('/webhook_simulado')
 def webhook_simulado():
     res_id = int(request.args.get('reserva_id'))
-    for res in reservas:
-        if res["id"] == res_id:
-            res["estado"] = "Ocupado"
-            break
+    # ACTUALIZAR EN SUPABASE: Cambiamos el estado a Ocupado de forma permanente
+    supabase.table("reservas").update({"estado": "Ocupado"}).eq("id", res_id).execute()
     return redirect(url_for('ver_panel'))
 
-# CAMBIAR HABITACIÓN AL VUELO: Ruta que procesa el menú desplegable del administrador
 @app.route('/reasignar', methods=['POST'])
 def reasignar_modulo():
     res_id = int(request.form.get('reserva_id'))
     nuevo_mod = int(request.form.get('nuevo_modulo'))
     
-    # Buscamos los datos de esa reserva para validar las fechas contra el nuevo módulo
-    res_actual = None
-    for res in reservas:
-        if res["id"] == res_id:
-            res_actual = res
-            break
+    query = supabase.table("reservas").select("*").eq("id", res_id).execute()
+    res_actual = query.data[0] if query.data else None
             
     if res_actual:
-        # Clave: Verificamos si el nuevo módulo que elegiste está libre en ESAS fechas
         if verificar_disponibilidad(nuevo_mod, res_actual["desde"], res_actual["hasta"], reserva_id_ignorar=res_id):
-            res_actual["modulo"] = nuevo_mod
-            print(f"[ADMIN] Reserva #{res_id} movida con éxito al Módulo {nuevo_mod}")
+            # ACTUALIZAR REASIGNACIÓN EN SUPABASE
+            supabase.table("reservas").update({"modulo": nuevo_mod}).eq("id", res_id).execute()
             return redirect(url_for('ver_panel'))
         else:
-            # Si el módulo que elegiste está pisado por otra reserva en esos días, tira aviso
-            return redirect(url_for('ver_panel', error=f"¡Error! El Módulo {nuevo_mod} ya está ocupado en las fechas de esa reserva."))
+            return redirect(url_for('ver_panel', error=f"¡Error! El Módulo {nuevo_mod} ya está ocupado en esas fechas."))
             
     return redirect(url_for('ver_panel'))
 
 @app.route('/panel')
 def ver_panel():
     error_msg = request.args.get('error')
-    return render_template_string(HTML_PANEL, reservas=reservas, total_modulos=TOTAL_MODULOS, msg_error=error_msg)
+    # LEER DE SUPABASE: Traemos todas las reservas ordenadas por ID para armar la tabla
+    query = supabase.table("reservas").select("*").order("id").execute()
+    lista_reservas = query.data
+    return render_template_string(HTML_PANEL, reservas=lista_reservas, total_modulos=TOTAL_MODULOS, msg_error=error_msg)
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
