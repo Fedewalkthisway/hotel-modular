@@ -26,7 +26,6 @@ def verificar_disponibilidad(modulo, desde_str, hasta_str, reserva_id_ignorar=No
         datetime.datetime.strptime(hasta_str, "%Y-%m-%d").date()
     )
     
-    # Traemos las reservas por HTTP directo (Sin librerías mañeras)
     url = f"{SUPABASE_URL}?modulo=eq.{modulo}&estado=in.(\"Pendiente de Pago\",\"Ocupado\")"
     response = requests.get(url, headers=SUPABASE_HEADERS)
     reservas_existentes = response.json() if response.status_code == 200 else []
@@ -244,7 +243,6 @@ def procesar_reserva():
     response = requests.post(SUPABASE_URL, headers=SUPABASE_HEADERS, json=nueva_reserva_data)
     datos_respuesta = response.json()
     
-    # Validamos que Supabase nos haya devuelto el registro creado correctamente
     if isinstance(datos_respuesta, list) and len(datos_respuesta) > 0:
         reserva_id = datos_respuesta[0]["id"]
     elif isinstance(datos_respuesta, dict) and "id" in datos_respuesta:
