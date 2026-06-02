@@ -6,12 +6,12 @@ import os
 
 app = Flask(__name__)
 
-# --- CONFIGURACIÓN DE WHATSAPP (CON VARIABLES DE ENTORNO SEGURAS) ---
+# --- CONFIGURACIÓN DE WHATSAPP ---
 ULTRAMSG_INSTANCE = os.environ.get("ULTRAMSG_INSTANCE")
 ULTRAMSG_TOKEN = os.environ.get("ULTRAMSG_TOKEN")
 ULTRAMSG_API_URL = f"https://api.ultramsg.com/instance{ULTRAMSG_INSTANCE}/messages/chat"
 
-# --- CREDENCIALES DE SUPABASE (CON VARIABLES DE ENTORNO SEGURAS) ---
+# --- CREDENCIALES DE SUPABASE ---
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_HEADERS = {
     "apikey": os.environ.get("SUPABASE_KEY"),
@@ -22,7 +22,6 @@ SUPABASE_HEADERS = {
 
 TOTAL_MODULOS = 16
 
-# --- FUNCIÓN AUXILIAR: ENVIAR WHATSAPP ---
 def enviar_whatsapp(telefono, mensaje):
     num_limpio = "".join(filter(str.isdigit, str(telefono)))
     if not num_limpio.startswith("54"):
@@ -40,13 +39,11 @@ def enviar_whatsapp(telefono, mensaje):
         print(f"Error al enviar WhatsApp: {e}")
         return False
 
-# --- MOTOR DE DISPONIBILIDAD SEGURO ---
 def verificar_disponibilidad(modulo, desde_str, hasta_str, reserva_id_ignorar=None):
     nuevas_fechas = (
         datetime.datetime.strptime(desde_str, "%Y-%m-%d").date(),
         datetime.datetime.strptime(hasta_str, "%Y-%m-%d").date()
     )
-    
     url = f"{SUPABASE_URL}?modulo=eq.{modulo}&estado=in.(\"Pendiente de Pago\",\"Ocupado\")"
     response = requests.get(url, headers=SUPABASE_HEADERS)
     reservas_existentes = response.json() if response.status_code == 200 else []
@@ -54,16 +51,13 @@ def verificar_disponibilidad(modulo, desde_str, hasta_str, reserva_id_ignorar=No
     for res in reservas_existentes:
         if reserva_id_ignorar is not None and int(res["id"]) == int(res_id_ignorar):
             continue
-            
         res_desde = datetime.datetime.strptime(res["desde"], "%Y-%m-%d").date()
         res_hasta = datetime.datetime.strptime(res["hasta"], "%Y-%m-%d").date()
-        
         if nuevas_fechas[0] < res_hasta and nuevas_fechas[1] > res_desde:
             return False 
-                
     return True
 
-# --- DISEÑO VISUAL ---
+# --- DISEÑOS VISUALES ---
 
 HTML_FORMULARIO = """
 <!DOCTYPE html>
@@ -129,7 +123,8 @@ HTML_PAGO = """
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8"><title>Pagar Reserva</title>
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pagar Reserva</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #f1f5f9; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
         .card { background: white; padding: 40px; border-radius: 16px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); text-align: center; max-width: 400px; width:100%; }
@@ -139,9 +134,32 @@ HTML_PAGO = """
 <body>
     <div class="card">
         <h2>Lugar Asegurado 🕒</h2>
-        <p>Bloqueamos el espacio en Supabase para tus fechas del <strong>{{ desde }}</strong> al <strong>{{ hasta }}</strong>.</p>
+        <p>Bloqueamos el espacio temporalmente para tus fechas.</p>
         <p>Monto: $15.000 ARS</p>
         <a href="/webhook_simulado?reserva_id={{ reserva_id }}" class="btn-simular">🟢 [ Simular Pago Exitoso ]</a>
+    </div>
+</body>
+</html>
+"""
+
+HTML_EXITO_CLIENTE = """
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pago Exitoso</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #ecfdf5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .card { background: white; padding: 40px; border-radius: 16px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); text-align: center; max-width: 400px; width:100%; border-top: 5px solid #10b981; }
+        h2 { color: #065f46; }
+        p { color: #047857; font-size: 15px; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h2>¡Pago Confirmado! 🎉</h2>
+        <p>Tu estadía ya está reservada de forma definitiva.</p>
+        <p>Te enviamos un mensaje de confirmación por <strong>WhatsApp</strong>. ¡Muchas gracias!</p>
     </div>
 </body>
 </html>
@@ -166,7 +184,6 @@ HTML_PANEL = """
         .badge.pendiente { background: rgba(234,179,8,0.2); color: #fde047; }
         .badge.ocupado { background: rgba(239,68,68,0.2); color: #f87171; }
         select { background: #0f172a; color: #f8fafc; border: 1px solid #475569; padding: 6px; border-radius: 6px; font-size: 13px; }
-        .btn-ws { background: #25d366; color: white; padding: 6px 12px; text-decoration: none; border-radius: 6px; font-size: 12px; font-weight: bold; }
         .error-flash { background: #fee2e2; color: #ef4444; padding: 12px; border-radius: 6px; margin-bottom: 15px; font-weight: bold; }
         .btn-cron { background: #38bdf8; color: #0f172a; padding: 10px 15px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px; }
     </style>
@@ -176,7 +193,7 @@ HTML_PANEL = """
         <h1>Centro de Mandos (Persistente)</h1>
         <div>
             <a href="/cron_checkin" class="btn-cron" style="margin-right: 10px;">🤖 Forzar Robot Check-in (Simulador)</a>
-            <a href="/" style="color: #38bdf8; text-decoration:none; font-weight:bold;">+ Simular Cliente</a>
+            <a href="/" target="_blank" style="color: #38bdf8; text-decoration:none; font-weight:bold;">+ Abrir Formulario</a>
         </div>
     </header>
     
@@ -284,7 +301,7 @@ def procesar_reserva():
     else:
         return f"Error al guardar en la base de datos: {response.text}", 500
     
-    return render_template_string(HTML_PAGO, reserva_id=reserva_id, desde=desde, hasta=hasta)
+    return render_template_string(HTML_PAGO, reserva_id=reserva_id)
 
 @app.route('/webhook_simulado')
 def webhook_simulado():
@@ -301,7 +318,8 @@ def webhook_simulado():
     )
     enviar_whatsapp(res_actual['telefono'], msg_confirmacion)
     
-    return redirect(url_for('ver_panel'))
+    # CAMBIO CRÍTICO: El cliente va a una pantalla de éxito, nunca más al panel
+    return render_template_string(HTML_EXITO_CLIENTE)
 
 @app.route('/cron_checkin')
 def cron_checkin():
@@ -337,13 +355,14 @@ def reasignar_modulo():
     if res_actual:
         if verificar_disponibilidad(nuevo_mod, res_actual["desde"], res_actual["hasta"], reserva_id_ignorar=res_id):
             requests.patch(url_select, headers=SUPABASE_HEADERS, json={"modulo": nuevo_mod})
-            return redirect(url_for('ver_panel'))
+            return redirect('/panel_control_secreto_hotel')
         else:
-            return redirect(url_for('ver_panel', error=f"¡Error! El Módulo {nuevo_mod} ya está ocupado en esas fechas."))
+            return redirect('/panel_control_secreto_hotel?error=' + f"¡Error! El Módulo {nuevo_mod} ya está ocupado en esas fechas.")
             
-    return redirect(url_for('ver_panel'))
+    return redirect('/panel_control_secreto_hotel')
 
-@app.route('/panel')
+# NUEVA RUTA PRIVADA PARA VOS
+@app.route('/panel_control_secreto_hotel')
 def ver_panel():
     error_msg = request.args.get('error')
     url = f"{SUPABASE_URL}?order=id.asc"
