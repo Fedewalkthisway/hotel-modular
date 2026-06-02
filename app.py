@@ -1,12 +1,14 @@
 from flask import Flask, render_template_string, request, redirect, url_for
-import mercadopago
 import requests
 import datetime
+import random
 
 app = Flask(__name__)
 
-# --- CONFIGURACIÓN DE MERCADO PAGO ---
-sdk = mercadopago.SDK("TEST-4734346917637424-052718-4a94639f7278292cb00bf2729aefb204-142273030")
+# --- CONFIGURACIÓN DE WHATSAPP (ULTRAMSG) ---
+ULTRAMSG_INSTANCE = "179025"
+ULTRAMSG_TOKEN = "m405w5gd17jdj8gi"
+ULTRAMSG_API_URL = f"https://api.ultramsg.com/instance{ULTRAMSG_INSTANCE}/messages/chat"
 
 # --- CREDENCIALES DE SUPABASE ---
 SUPABASE_URL = "https://wwwujisceptxemkuwfxx.supabase.co/rest/v1/reservas"
@@ -18,6 +20,26 @@ SUPABASE_HEADERS = {
 }
 
 TOTAL_MODULOS = 16
+
+# --- FUNCIÓN AUXILIAR: ENVIAR WHATSAPP ---
+def enviar_whatsapp(telefono, mensaje):
+    # Limpiamos el número por si las dudas (sacamos espacios o guiones)
+    num_limpio = "".join(filter(str.isdigit, str(telefono)))
+    # Si no tiene el código de país de Argentina, se lo agregamos por defecto
+    if not num_limpio.startswith("54"):
+        num_limpio = "54" + num_limpio
+        
+    payload = {
+        "token": ULTRAMSG_TOKEN,
+        "to": num_limpio,
+        "body": mensaje
+    }
+    try:
+        response = requests.post(ULTRAMSG_API_URL, data=payload)
+        return response.status_code == 200
+    except Exception as e:
+        print(f"Error al enviar WhatsApp: {e}")
+        return False
 
 # --- MOTOR DE DISPONIBILIDAD SEGURO ---
 def verificar_disponibilidad(modulo, desde_str, hasta_str, reserva_id_ignorar=None):
@@ -75,6 +97,10 @@ HTML_FORMULARIO = """
             <div class="form-group">
                 <label>DNI / Pasaporte</label>
                 <input type="text" name="dni" placeholder="35123456" required>
+            </div>
+            <div class="form-group">
+                <label>Celular (Con código de área ej: 3537654321)</label>
+                <input type="text" name="telefono" placeholder="3537654321" required>
             </div>
             <div class="row">
                 <div class="form-group">
@@ -143,12 +169,16 @@ HTML_PANEL = """
         select { background: #0f172a; color: #f8fafc; border: 1px solid #475569; padding: 6px; border-radius: 6px; font-size: 13px; }
         .btn-ws { background: #25d366; color: white; padding: 6px 12px; text-decoration: none; border-radius: 6px; font-size: 12px; font-weight: bold; }
         .error-flash { background: #fee2e2; color: #ef4444; padding: 12px; border-radius: 6px; margin-bottom: 15px; font-weight: bold; }
+        .btn-cron { background: #38bdf8; color: #0f172a; padding: 10px 15px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px; }
     </style>
 </head>
 <body>
     <header>
         <h1>Centro de Mandos (Persistente)</h1>
-        <a href="/" style="color: #38bdf8; text-decoration:none; font-weight:bold;">+ Simular Cliente</a>
+        <div>
+            <a href="/cron_checkin" class="btn-cron" style="margin-right: 10px;">🤖 Forzar Robot Check-in (Simulador)</a>
+            <a href="/" style="color: #38bdf8; text-decoration:none; font-weight:bold;">+ Simular Cliente</a>
+        </div>
     </header>
     
     <div class="contenedor">
@@ -164,11 +194,12 @@ HTML_PANEL = """
                         <th>ID</th>
                         <th>Huésped</th>
                         <th>DNI</th>
+                        <th>Celular</th>
                         <th>Desde</th>
                         <th>Hasta</th>
                         <th>Módulo Físico</th>
+                        <th>PIN Acceso</th>
                         <th>Estado</th>
-                        <th>Acción</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -177,6 +208,7 @@ HTML_PANEL = """
                         <td>#{{ res.id }}</td>
                         <td><strong>{{ res.huesped }}</strong></td>
                         <td>{{ res.dni }}</td>
+                        <td>{{ res.telefono }}</td>
                         <td>{{ res.desde }}</td>
                         <td>{{ res.hasta }}</td>
                         <td>
@@ -189,13 +221,11 @@ HTML_PANEL = """
                                 </select>
                             </form>
                         </td>
+                        <td><code>{{ res.codigo_acceso if res.codigo_acceso else 'No asignado' }}</code></td>
                         <td>
                             <span class="badge {{ 'pendiente' if res.estado == 'Pendiente de Pago' else 'ocupado' }}">
                                 {{ res.estado }}
                             </span>
-                        </td>
-                        <td>
-                            <a href="#" class="btn-ws">📱 WhatsApp</a>
                         </td>
                     </tr>
                     {% endfor %}
@@ -217,6 +247,7 @@ def mostrar_formulario():
 def procesar_reserva():
     nombre = request.form.get('nombre')
     dni = request.form.get('dni')
+    telefono = request.form.get('telefono')
     desde = request.form.get('desde')
     hasta = request.form.get('hasta')
     personas = request.form.get('personas')
@@ -230,14 +261,19 @@ def procesar_reserva():
     if not modulo_libre:
         return "Lo sentimos, no hay disponibilidad.", 400
         
+    # Generamos un PIN de acceso de 4 dígitos aleatorio de forma preventiva
+    pin_generado = str(random.randint(1000, 9999))
+        
     nueva_reserva_data = {
         "modulo": modulo_libre,
         "estado": "Pendiente de Pago",
         "huesped": nombre,
         "dni": dni,
+        "telefono": telefono,
         "desde": desde,
         "hasta": hasta,
-        "personas": personas
+        "personas": personas,
+        "codigo_acceso": pin_generado
     }
     
     response = requests.post(SUPABASE_URL, headers=SUPABASE_HEADERS, json=nueva_reserva_data)
@@ -255,9 +291,49 @@ def procesar_reserva():
 @app.route('/webhook_simulado')
 def webhook_simulado():
     res_id = int(request.args.get('reserva_id'))
-    url = f"{SUPABASE_URL}?id=eq.{res_id}"
-    requests.patch(url, headers=SUPABASE_HEADERS, json={"estado": "Ocupado"})
+    url_select = f"{SUPABASE_URL}?id=eq.{res_id}"
+    
+    # Traemos los datos de la reserva para saber a quién notificar
+    res_actual = requests.get(url_select, headers=SUPABASE_HEADERS).json()[0]
+    
+    # 1. Cambiamos el estado a "Ocupado" (Pago Confirmado)
+    requests.patch(url_select, headers=SUPABASE_HEADERS, json={"estado": "Ocupado"})
+    
+    # 2. Despachamos el MENSAJE INMEDIATO DE CONFIRMACIÓN
+    msg_confirmacion = (
+        f"¡Hola {res_actual['huesped']}! Recibimos tu pago correctamente. 👍\n\n"
+        f"Tu reserva para ingresar el {res_actual['desde']} está confirmada.\n"
+        f"El día de tu llegada, unas horas antes del horario de check-in, te enviaremos por este mismo medio el número de módulo asignado y tu código numérico de acceso temporal. ¡Buen viaje!"
+    )
+    enviar_whatsapp(res_actual['telefono'], msg_confirmacion)
+    
     return redirect(url_for('ver_panel'))
+
+# --- ROBOT AUTOMÁTICO (CRON JOB) PARA ENVIAR ACCESOS EN EL DÍA ---
+@app.route('/cron_checkin')
+def cron_checkin():
+    hoy_str = datetime.date.today().strftime("%Y-%m-%d")
+    
+    # Buscamos todas las reservas que entran HOY y que tengan estado "Ocupado"
+    url = f"{SUPABASE_URL}?desde=eq.{hoy_str}&estado=eq.Ocupado"
+    response = requests.get(url, headers=SUPABASE_HEADERS)
+    reservas_de_hoy = response.json() if response.status_code == 200 else []
+    
+    mensajes_enviados = 0
+    for res in reservas_de_hoy:
+        # Armamos el mensaje del día del check-in con el PIN y el módulo asignado
+        msg_acceso = (
+            f"¡Hola {res['huesped']}! Hoy es tu día de ingreso en Hotel Modular. 🏨✨\n\n"
+            f"Tu espacio está listo:\n"
+            f"🚪 Módulo asignado: MÓDULO {res['modulo']}\n"
+            f"🔑 Código de acceso: {res['codigo_acceso']}\n\n"
+            f"Recordá que el código se activará automáticamente a la hora del check-in. ¡Que disfrutes tu estadía!"
+        )
+        exito = enviar_whatsapp(res['telefono'], msg_acceso)
+        if exito:
+            mensajes_enviados += 1
+            
+    return f"Robot ejecutado. Se enviaron {mensajes_enviados} mensajes de check-in para el día de hoy ({hoy_str}).", 200
 
 @app.route('/reasignar', methods=['POST'])
 def reasignar_modulo():
