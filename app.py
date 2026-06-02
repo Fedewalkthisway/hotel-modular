@@ -57,6 +57,44 @@ def verificar_disponibilidad(modulo, desde_str, hasta_str, reserva_id_ignorar=No
             return False 
     return True
 
+# --- FUNCIONES ANTI-SPAM: TEXTOS VARIABLES ---
+def generar_msg_confirmacion(nombre, fecha):
+    saludos = ["¡Hola", "Buenas tardes", "Buen día", "Qué tal"]
+    conectores = ["recibimos tu pago correctamente", "el pago fue acreditado con éxito", "confirmamos el ingreso de tu pago", "ya registramos tu pago"]
+    cierres = ["¡Te esperamos!", "¡Buen viaje!", "Nos vemos pronto.", "Que tengas un excelente viaje de llegada."]
+    
+    saludo = random.choice(saludos)
+    conector = random.choice(conectores)
+    cierre = random.choice(cierres)
+    
+    # Metemos un número aleatorio invisible al final (ID de rastreo ficticio) para que el mensaje sea 100% único
+    ref = random.randint(1000, 9999)
+    
+    return (
+        f"{saludo} {nombre}! {conector}. 👍\n\n"
+        f"Tu estadía para ingresar el {fecha} quedó confirmada de manera definitiva.\n"
+        f"El día de tu llegada, unas horas antes del check-in, te vamos a mandar por acá el número de módulo asignado junto con la clave digital de acceso temporal.\n\n"
+        f"{cierre} (Ref: #{ref})"
+    )
+
+def generar_msg_acceso(nombre, modulo, pin):
+    saludos = ["¡Hola", "Buenas,", "Buen día", "Hola de nuevo"]
+    recordatorios = ["Hoy es tu día de ingreso en Hotel Modular.", "Ya está todo listo para tu check-in de hoy.", "Te recordamos que hoy es tu fecha de entrada."]
+    cierres = ["¡Que disfrutes la estadía!", "¡Cualquier duda nos avisás!", "Buen ingreso.", "Disfrutá tu descanso."]
+    
+    saludo = random.choice(saludos)
+    rec = random.choice(recordatorios)
+    cierre = random.choice(cierres)
+    ref = random.randint(1000, 9999)
+    
+    return (
+        f"{saludo} {nombre}! {rec} 🏨✨\n\n"
+        f"Tu espacio asignado:\n"
+        f"🚪 Unidad: MÓDULO {modulo}\n"
+        f"🔑 Código PIN para la cerradura: {pin}\n\n"
+        f"Recordá que el código se activa automáticamente al horario del check-in. {cierre} (Ref: #{ref})"
+    )
+
 # --- DISEÑOS VISUALES ---
 
 HTML_FORMULARIO = """
@@ -311,14 +349,10 @@ def webhook_simulado():
     res_actual = requests.get(url_select, headers=SUPABASE_HEADERS).json()[0]
     requests.patch(url_select, headers=SUPABASE_HEADERS, json={"estado": "Ocupado"})
     
-    msg_confirmacion = (
-        f"¡Hola {res_actual['huesped']}! Recibimos tu pago correctamente. 👍\n\n"
-        f"Tu reserva para ingresar el {res_actual['desde']} está confirmada.\n"
-        f"El día de tu llegada, unas horas antes del horario de check-in, te enviaremos por este mismo medio el número de módulo asignado y tu código numérico de acceso temporal. ¡Buen viaje!"
-    )
+    # TEXTO DINÁMICO ANTI-SPAM
+    msg_confirmacion = generar_msg_confirmacion(res_actual['huesped'], res_actual['desde'])
     enviar_whatsapp(res_actual['telefono'], msg_confirmacion)
     
-    # CAMBIO CRÍTICO: El cliente va a una pantalla de éxito, nunca más al panel
     return render_template_string(HTML_EXITO_CLIENTE)
 
 @app.route('/cron_checkin')
@@ -330,18 +364,13 @@ def cron_checkin():
     
     mensajes_enviados = 0
     for res in reservas_de_hoy:
-        msg_acceso = (
-            f"¡Hola {res['huesped']}! Hoy es tu día de ingreso en Hotel Modular. 🏨✨\n\n"
-            f"Tu espacio está listo:\n"
-            f"🚪 Módulo asignado: MÓDULO {res['modulo']}\n"
-            f"🔑 Código de acceso: {res['codigo_acceso']}\n\n"
-            f"Recordá que el código se activará automáticamente a la hora del check-in. ¡Que disfrutes tu estadía!"
-        )
+        # TEXTO DINÁMICO ANTI-SPAM
+        msg_acceso = generar_msg_acceso(res['huesped'], res['modulo'], res['codigo_acceso'])
         exito = enviar_whatsapp(res['telefono'], msg_acceso)
         if exito:
             mensajes_enviados += 1
             
-    return f"Robot ejecutado. Se enviaron {mensajes_enviados} mensajes de check-in para el día de hoy ({hoy_str}).", 200
+    return f"Robot ejecutado. Se enviaron {mensajes_enviados} mensajes variables de check-in para el día de hoy ({hoy_str}).", 200
 
 @app.route('/reasignar', methods=['POST'])
 def reasignar_modulo():
@@ -361,7 +390,6 @@ def reasignar_modulo():
             
     return redirect('/panel_control_secreto_hotel')
 
-# NUEVA RUTA PRIVADA PARA VOS
 @app.route('/panel_control_secreto_hotel')
 def ver_panel():
     error_msg = request.args.get('error')
