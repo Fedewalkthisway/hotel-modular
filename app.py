@@ -2,19 +2,20 @@ from flask import Flask, render_template_string, request, redirect, url_for
 import requests
 import datetime
 import random
+import os
 
 app = Flask(__name__)
 
-# --- CONFIGURACIÓN DE WHATSAPP (ULTRAMSG) ---
-ULTRAMSG_INSTANCE = "179025"
-ULTRAMSG_TOKEN = "m405w5gd17jdj8gi"
+# --- CONFIGURACIÓN DE WHATSAPP (CON VARIABLES DE ENTORNO SEGURAS) ---
+ULTRAMSG_INSTANCE = os.environ.get("ULTRAMSG_INSTANCE")
+ULTRAMSG_TOKEN = os.environ.get("ULTRAMSG_TOKEN")
 ULTRAMSG_API_URL = f"https://api.ultramsg.com/instance{ULTRAMSG_INSTANCE}/messages/chat"
 
-# --- CREDENCIALES DE SUPABASE ---
-SUPABASE_URL = "https://wwwujisceptxemkuwfxx.supabase.co/rest/v1/reservas"
+# --- CREDENCIALES DE SUPABASE (CON VARIABLES DE ENTORNO SEGURAS) ---
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_HEADERS = {
-    "apikey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind3d3VqaXNjZXB0eGVta3V3Znh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk5MTE0NTksImV4cCI6MjA5NTQ4NzQ1OX0.cB2sdHAkdRMDNBtUKhjsu791WW8ntHRn52lfdvTD3To",
-    "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind3d3VqaXNjZXB0eGVta3V3Znh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk5MTE0NTksImV4cCI6MjA5NTQ4NzQ1OX0.cB2sdHAkdRMDNBtUKhjsu791WW8ntHRn52lfdvTD3To",
+    "apikey": os.environ.get("SUPABASE_KEY"),
+    "Authorization": f"Bearer {os.environ.get('SUPABASE_KEY')}",
     "Content-Type": "application/json",
     "Prefer": "return=representation"
 }
@@ -23,9 +24,7 @@ TOTAL_MODULOS = 16
 
 # --- FUNCIÓN AUXILIAR: ENVIAR WHATSAPP ---
 def enviar_whatsapp(telefono, mensaje):
-    # Limpiamos el número por si las dudas (sacamos espacios o guiones)
     num_limpio = "".join(filter(str.isdigit, str(telefono)))
-    # Si no tiene el código de país de Argentina, se lo agregamos por defecto
     if not num_limpio.startswith("54"):
         num_limpio = "54" + num_limpio
         
@@ -261,7 +260,6 @@ def procesar_reserva():
     if not modulo_libre:
         return "Lo sentimos, no hay disponibilidad.", 400
         
-    # Generamos un PIN de acceso de 4 dígitos aleatorio de forma preventiva
     pin_generado = str(random.randint(1000, 9999))
         
     nueva_reserva_data = {
@@ -293,13 +291,9 @@ def webhook_simulado():
     res_id = int(request.args.get('reserva_id'))
     url_select = f"{SUPABASE_URL}?id=eq.{res_id}"
     
-    # Traemos los datos de la reserva para saber a quién notificar
     res_actual = requests.get(url_select, headers=SUPABASE_HEADERS).json()[0]
-    
-    # 1. Cambiamos el estado a "Ocupado" (Pago Confirmado)
     requests.patch(url_select, headers=SUPABASE_HEADERS, json={"estado": "Ocupado"})
     
-    # 2. Despachamos el MENSAJE INMEDIATO DE CONFIRMACIÓN
     msg_confirmacion = (
         f"¡Hola {res_actual['huesped']}! Recibimos tu pago correctamente. 👍\n\n"
         f"Tu reserva para ingresar el {res_actual['desde']} está confirmada.\n"
@@ -309,19 +303,15 @@ def webhook_simulado():
     
     return redirect(url_for('ver_panel'))
 
-# --- ROBOT AUTOMÁTICO (CRON JOB) PARA ENVIAR ACCESOS EN EL DÍA ---
 @app.route('/cron_checkin')
 def cron_checkin():
     hoy_str = datetime.date.today().strftime("%Y-%m-%d")
-    
-    # Buscamos todas las reservas que entran HOY y que tengan estado "Ocupado"
     url = f"{SUPABASE_URL}?desde=eq.{hoy_str}&estado=eq.Ocupado"
     response = requests.get(url, headers=SUPABASE_HEADERS)
     reservas_de_hoy = response.json() if response.status_code == 200 else []
     
     mensajes_enviados = 0
     for res in reservas_de_hoy:
-        # Armamos el mensaje del día del check-in con el PIN y el módulo asignado
         msg_acceso = (
             f"¡Hola {res['huesped']}! Hoy es tu día de ingreso en Hotel Modular. 🏨✨\n\n"
             f"Tu espacio está listo:\n"
